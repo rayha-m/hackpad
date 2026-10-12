@@ -1,0 +1,98 @@
+# Hackpad case builder for FreeCAD - version with a knob (made with Claude)
+# 3 switches + 1 rotary encoder in a column. The XIAO / USB end is on the left.
+# How to run: in FreeCAD, File -> Open this file, then click the green
+# "Execute macro" (play) button. Files are saved into your hackpad repo folder
+# (~/Projects/hackpad): production/Top.STEP, production/Bottom.STEP and CAD/hackpad.STEP
+#
+# If your measured board size is different, change BOARD_L / BOARD_W below.
+
+import os
+import FreeCAD as App
+import FreeCADGui as Gui
+import Part
+import Mesh
+
+# ---- Your board (mm) - from KiCad Measure ----
+BOARD_L = 80.05     # from the KiCad board outline (with knob)
+BOARD_W = 21.0
+
+# ---- Case settings (mm) ----
+TOL = 0.4           # printing tolerance per side
+MARGIN = 10.0       # wall thickness around the board
+FLOOR = 3.0
+CASE_H = 13.0
+PLATE_T = 3.0
+HOLE_D = 2.9
+HOLE_IN = 5.0
+CUT = 14.0          # switch cutout; also clears the knob's body
+PITCH = 19.05
+USB_W, USB_H = 13.0, 10.0
+
+POCKET_L, POCKET_W = BOARD_L + 2 * TOL, BOARD_W + 2 * TOL
+OUTER_L, OUTER_W = POCKET_L + 2 * MARGIN, POCKET_W + 2 * MARGIN
+# Centers of SW1, SW2, SW3 and the knob, measured from the board's center
+# (taken from the KiCad PCB). Negative = toward the USB end.
+CENTERS = [-27.525, -8.39, 10.475, 29.525]
+
+
+def centered_box(lx, ly, lz, cx, cy, z0):
+    return Part.makeBox(lx, ly, lz, App.Vector(cx - lx / 2, cy - ly / 2, z0))
+
+
+def screw_holes():
+    out = []
+    for sx in (-1, 1):
+        for sy in (-1, 1):
+            out.append(Part.makeCylinder(HOLE_D / 2, 100, App.Vector(
+                sx * (OUTER_L / 2 - HOLE_IN), sy * (OUTER_W / 2 - HOLE_IN), -50)))
+    return out
+
+
+# ---- Case bottom ----
+case = centered_box(OUTER_L, OUTER_W, CASE_H, 0, 0, 0)
+case = case.cut(centered_box(POCKET_L, POCKET_W, CASE_H, 0, 0, FLOOR))
+for h in screw_holes():
+    case = case.cut(h)
+wall_x = -(OUTER_L / 2 + POCKET_L / 2) / 2
+case = case.cut(centered_box(MARGIN + 2, USB_W, CASE_H, wall_x, 0, FLOOR))
+
+# ---- Plate ----
+plate = centered_box(OUTER_L, OUTER_W, PLATE_T, 0, 0, CASE_H)
+for h in screw_holes():
+    plate = plate.cut(h)
+for x in CENTERS:
+    plate = plate.cut(centered_box(CUT, CUT, PLATE_T + 2, x, 0, CASE_H - 1))
+
+# ---- PCB stand-in (for the full assembly model) ----
+PCB_T = 1.6
+PCB_TOP = CASE_H - 2.0          # switches put the PCB about 5 mm under the plate top
+pcb = centered_box(BOARD_L, BOARD_W, PCB_T, 0, 0, PCB_TOP - PCB_T)
+
+# ---- Show and save ----
+doc = App.newDocument("hackpad_case")
+case_obj = doc.addObject("Part::Feature", "Bottom")
+case_obj.Shape = case
+plate_obj = doc.addObject("Part::Feature", "Top")
+plate_obj.Shape = plate
+pcb_obj = doc.addObject("Part::Feature", "PCB")
+pcb_obj.Shape = pcb
+doc.recompute()
+try:
+    plate_obj.ViewObject.Transparency = 40
+    pcb_obj.ViewObject.ShapeColor = (0.1, 0.5, 0.2)
+    Gui.activeDocument().activeView().viewIsometric()
+    Gui.SendMsgToActiveView("ViewFit")
+except Exception:
+    pass
+
+import Import
+repo = os.path.expanduser("~/Projects/hackpad")
+os.makedirs(os.path.join(repo, "production"), exist_ok=True)
+os.makedirs(os.path.join(repo, "CAD"), exist_ok=True)
+Import.export([case_obj], os.path.join(repo, "production", "Bottom.STEP"))
+Import.export([plate_obj], os.path.join(repo, "production", "Top.STEP"))
+Import.export([case_obj, plate_obj, pcb_obj], os.path.join(repo, "CAD", "hackpad.STEP"))
+Mesh.export([case_obj], os.path.join(repo, "production", "Bottom.stl"))
+Mesh.export([plate_obj], os.path.join(repo, "production", "Top.stl"))
+doc.saveAs(os.path.join(repo, "CAD", "hackpad-case.FCStd"))
+App.Console.PrintMessage("Hackpad case done! STEP files saved in %s\n" % repo)
